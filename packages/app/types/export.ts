@@ -16,7 +16,7 @@ import type { SessionMusicLink } from './session-music'
 // EXPORT FORMAT VERSION & COMPATIBILITY
 // =============================================================================
 
-export const EXPORT_FORMAT_VERSION = '1.1' as const
+export const EXPORT_FORMAT_VERSION = '1.2' as const
 
 /**
  * Version Compatibility Table
@@ -36,6 +36,7 @@ export const EXPORT_FORMAT_VERSION = '1.1' as const
 export const VERSION_COMPATIBILITY: Record<string, string> = {
   '1.0': '1.0.0-beta.1', // Initial format - hardcoded type_ids
   '1.1': '1.0.0-beta.2', // Added entityTypes mapping, type_name field
+  '1.2': '1.5.4', // Campaign manuscript, quests, dialogue and narrative links
 }
 
 /**
@@ -208,6 +209,22 @@ export interface CampaignExportManifest {
   // never sees a conflict dialog. Optional for backwards compatibility with
   // exports made before folder support shipped.
   folders?: ExportFolder[]
+  narrative?: ExportNarrative
+}
+
+export interface ExportNarrative {
+  manuscript?: Record<string, unknown>
+  sections: Record<string, unknown>[]
+  beats: Record<string, unknown>[]
+  variables: Record<string, unknown>[]
+  quests: Record<string, unknown>[]
+  objectives: Record<string, unknown>[]
+  transitions: Record<string, unknown>[]
+  dependencies: Record<string, unknown>[]
+  dialogues: Record<string, unknown>[]
+  dialogueNodes: Record<string, unknown>[]
+  dialogueEdges: Record<string, unknown>[]
+  links: Record<string, unknown>[]
 }
 
 export interface ExportTag {

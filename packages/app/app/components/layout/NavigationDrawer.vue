@@ -108,6 +108,9 @@
         :disabled="!hasActiveCampaign"
         to="/sessions"
       />
+      <v-list-item prepend-icon="mdi-book-open-variant" title="Manuscript" :disabled="!hasActiveCampaign" to="/manuscript" />
+      <v-list-item prepend-icon="mdi-format-list-checks" title="Quests" :disabled="!hasActiveCampaign" to="/quests" />
+      <v-list-item prepend-icon="mdi-forum-outline" title="Dialogue" :disabled="!hasActiveCampaign" to="/dialogues" />
       <v-list-item
         prepend-icon="mdi-sword-cross"
         :title="$t('nav.encounters')"

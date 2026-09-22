@@ -115,6 +115,9 @@
                 @open-entity="openEntityPreview"
               />
             </v-col>
+            <v-col cols="12" sm="6" :lg="maps.length > 0 ? 6 : 3">
+              <v-card data-testid="narrative-summary" class="h-100"><v-card-title>Story authoring</v-card-title><v-card-text><div>{{ narrative.scenes }} scenes</div><div>{{ narrative.quests }} quests</div><div>{{ narrative.dialogues }} dialogue graphs</div><v-btn data-testid="dashboard-open-manuscript" class="mt-2" size="small" to="/manuscript">Open manuscript</v-btn></v-card-text></v-card>
+            </v-col>
           </v-row>
         </v-col>
       </v-row>
@@ -170,7 +173,7 @@
 
       <v-row class="mb-4">
         <v-col cols="12" sm="6" md="4">
-          <v-card hover class="h-100" @click="showExportDialog = true">
+          <v-card data-testid="campaign-export" hover class="h-100" @click="showExportDialog = true">
             <v-card-text class="pa-4">
               <div class="d-flex align-center">
                 <v-icon icon="mdi-export" size="28" color="primary" class="mr-3" />
@@ -185,7 +188,7 @@
           </v-card>
         </v-col>
         <v-col cols="12" sm="6" md="4">
-          <v-card hover class="h-100" @click="showImportDialog = true">
+          <v-card data-testid="campaign-import" hover class="h-100" @click="showImportDialog = true">
             <v-card-text class="pa-4">
               <div class="d-flex align-center">
                 <v-icon icon="mdi-import" size="28" color="secondary" class="mr-3" />
@@ -320,6 +323,7 @@ const activeCampaignName = useCookie('activeCampaignName')
 const sessions = ref<Session[]>([])
 const maps = ref<CampaignMap[]>([])
 const currentWeather = ref<{ weatherType: string, temperature?: number } | null>(null)
+const narrative = ref({ scenes: 0, quests: 0, dialogues: 0 })
 
 // Entity preview dialog
 const showEntityPreview = ref(false)
@@ -544,6 +548,7 @@ async function fetchDashboardData() {
 
     // Calendar (direct fetch)
     fetchCalendar(),
+    $fetch<{ scenes: number, quests: number, dialogues: number }>(`/api/campaigns/${campaignId}/narrative-summary`).then((result) => { narrative.value = result }),
   ])
 }
 

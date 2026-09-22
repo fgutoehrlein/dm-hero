@@ -41,7 +41,7 @@ DM Hero helps Dungeon Masters organize their D&D campaigns by solving the proble
 ### Development
 
 ```bash
-# Prerequisites: Node.js 22.20+
+# Prerequisites: Node.js 24+
 nvm use
 
 # Install dependencies
@@ -100,7 +100,7 @@ This is a personal project, but contributions are welcome!
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes (follow ESLint + Prettier rules)
-4. Run tests: `pnpm test`
+4. Run tests: `pnpm test` and `pnpm test:e2e`
 5. **Add a changeset** (see below)
 6. Submit a pull request
 

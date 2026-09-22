@@ -584,6 +584,36 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, message: 'Invalid import options' })
     }
 
+    // Narrative payloads are optional so every older .dmhero archive remains valid.
+    // IDs are remapped here because a portable export must never rely on SQLite row IDs.
+    if (manifest.narrative) {
+      const narrative = manifest.narrative
+      const sectionIds = new Map<number, number>()
+      const questIds = new Map<number, number>()
+      const graphIds = new Map<number, number>()
+      const nodeIds = new Map<number, number>()
+      const targetManuscript = db.prepare('SELECT id FROM manuscripts WHERE campaign_id = ?').get(campaignId) as { id: number }
+      const load = db.transaction(() => {
+        if (narrative.manuscript) db.prepare('UPDATE manuscripts SET title = ?, description = ?, canon_state = ?, lifecycle_state = ? WHERE id = ?').run(narrative.manuscript.title || manifest.campaign.name, narrative.manuscript.description || null, narrative.manuscript.canon_state || 'canon', narrative.manuscript.lifecycle_state || 'draft', targetManuscript.id)
+        for (const section of narrative.sections || []) {
+          const result = db.prepare('INSERT INTO manuscript_sections (manuscript_id, title, section_type, content, metadata, canon_state, lifecycle_state, sort_order, viewpoint, story_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(targetManuscript.id, section.title || 'Untitled', section.section_type || 'scene', section.content || '', section.metadata || '{}', section.canon_state || 'canon', section.lifecycle_state || 'draft', section.sort_order || 0, section.viewpoint || null, section.story_date || null)
+          sectionIds.set(Number(section.id), Number(result.lastInsertRowid))
+        }
+        for (const section of narrative.sections || []) if (section.parent_section_id) db.prepare('UPDATE manuscript_sections SET parent_section_id = ? WHERE id = ?').run(sectionIds.get(Number(section.parent_section_id)) || null, sectionIds.get(Number(section.id)))
+        for (const beat of narrative.beats || []) db.prepare('INSERT INTO story_beats (campaign_id, manuscript_section_id, title, description, sort_order, canon_state, lifecycle_state) VALUES (?, ?, ?, ?, ?, ?, ?)').run(campaignId, sectionIds.get(Number(beat.manuscript_section_id)) || null, beat.title || 'Untitled', beat.description || null, beat.sort_order || 0, beat.canon_state || 'canon', beat.lifecycle_state || 'draft')
+        for (const variable of narrative.variables || []) db.prepare('INSERT OR IGNORE INTO campaign_variables (campaign_id, name, value_type, default_value, description) VALUES (?, ?, ?, ?, ?)').run(campaignId, variable.name, variable.value_type, variable.default_value, variable.description || null)
+        for (const quest of narrative.quests || []) { const result = db.prepare('INSERT INTO quests (campaign_id, title, description, status, canon_state, lifecycle_state, recovery_notes) VALUES (?, ?, ?, ?, ?, ?, ?)').run(campaignId, quest.title || 'Untitled', quest.description || '', quest.status || 'draft', quest.canon_state || 'canon', quest.lifecycle_state || 'draft', quest.recovery_notes || ''); questIds.set(Number(quest.id), Number(result.lastInsertRowid)) }
+        for (const objective of narrative.objectives || []) db.prepare('INSERT INTO quest_objectives (quest_id, title, description, status, sort_order) VALUES (?, ?, ?, ?, ?)').run(questIds.get(Number(objective.quest_id)), objective.title || 'Untitled', objective.description || '', objective.status || 'pending', objective.sort_order || 0)
+        for (const transition of narrative.transitions || []) db.prepare('INSERT INTO quest_transitions (quest_id, from_status, to_status, condition_ast, effect_ast) VALUES (?, ?, ?, ?, ?)').run(questIds.get(Number(transition.quest_id)), transition.from_status, transition.to_status, transition.condition_ast || '{"all":[]}', transition.effect_ast || '[]')
+        for (const dependency of narrative.dependencies || []) { const quest = questIds.get(Number(dependency.quest_id)); const dependsOn = questIds.get(Number(dependency.depends_on_quest_id)); if (quest && dependsOn && quest !== dependsOn) db.prepare('INSERT OR IGNORE INTO quest_dependencies (quest_id, depends_on_quest_id) VALUES (?, ?)').run(quest, dependsOn) }
+        for (const graph of narrative.dialogues || []) { const result = db.prepare('INSERT INTO dialogue_graphs (campaign_id, title, description, lifecycle_state) VALUES (?, ?, ?, ?)').run(campaignId, graph.title || 'Untitled', graph.description || '', graph.lifecycle_state || 'draft'); graphIds.set(Number(graph.id), Number(result.lastInsertRowid)) }
+        for (const node of narrative.dialogueNodes || []) { const result = db.prepare('INSERT INTO dialogue_nodes (graph_id, node_type, line_id, title, content, condition_ast, effect_ast, position_x, position_y, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(graphIds.get(Number(node.graph_id)), node.node_type || 'line', node.line_id || null, node.title || null, node.content || '', node.condition_ast || '{"all":[]}', node.effect_ast || '[]', node.position_x || 0, node.position_y || 0, node.sort_order || 0); nodeIds.set(Number(node.id), Number(result.lastInsertRowid)) }
+        for (const edge of narrative.dialogueEdges || []) { const graph = graphIds.get(Number(edge.graph_id)); const source = nodeIds.get(Number(edge.source_node_id)); const target = nodeIds.get(Number(edge.target_node_id)); if (graph && source && target) db.prepare('INSERT INTO dialogue_edges (graph_id, source_node_id, target_node_id, label, condition_ast, effect_ast) VALUES (?, ?, ?, ?, ?, ?)').run(graph, source, target, edge.label || null, edge.condition_ast || '{"all":[]}', edge.effect_ast || '[]') }
+        for (const link of narrative.links || []) { const sourceId = link.source_type === 'manuscript_section' ? sectionIds.get(Number(link.source_id)) : undefined; if (sourceId) db.prepare('INSERT OR IGNORE INTO narrative_links (campaign_id, source_type, source_id, target_uid, label) VALUES (?, ?, ?, ?, ?)').run(campaignId, link.source_type, sourceId, link.target_uid, link.label || null) }
+      })
+      load()
+    }
+
     // ==========================================================================
     // ENTITY CONFLICT DETECTION (merge mode only, needs campaignId)
     // ==========================================================================
