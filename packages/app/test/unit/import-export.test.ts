@@ -63,8 +63,8 @@ describe('Version Compatibility - isExportCompatible', () => {
     expect(isExportCompatible('3.5', '1.0.0-beta.1')).toBe(true)
   })
 
-  it('should export with current format version 1.1', () => {
-    expect(EXPORT_FORMAT_VERSION).toBe('1.1')
+  it('should export with current format version 1.2', () => {
+    expect(EXPORT_FORMAT_VERSION).toBe('1.2')
   })
 })
 

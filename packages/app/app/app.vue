@@ -178,7 +178,7 @@ function getEntityPath(entityType: string, entityId: number, entityName: string)
 }
 
 function navigateToResult(result: (typeof searchResults.value)[0]) {
-  const path = getEntityPath(result.type, result.id, result.name)
+  const path = result.path || getEntityPath(result.type, result.id, result.name)
   navigateTo(path, { replace: false }) // Force navigation even if on same page
   showSearch.value = false
   searchQuery.value = ''
@@ -283,6 +283,7 @@ watch(searchQuery, async (query) => {
         type: string
         icon: string
         color: string
+        path?: string
         linkedEntities: string[]
       }>
     >('/api/search', {
@@ -294,7 +295,7 @@ watch(searchQuery, async (query) => {
 
     searchResults.value = results.map(r => ({
       ...r,
-      path: getEntityPath(r.type, r.id, r.name),
+      path: r.path || getEntityPath(r.type, r.id, r.name),
       linkedEntities: r.linkedEntities || [],
     }))
   }

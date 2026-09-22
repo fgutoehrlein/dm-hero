@@ -22,6 +22,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Install Chromium for E2E
+        run: pnpm --filter @dm-hero/app exec playwright install --with-deps chromium
+
+      - name: Run narrative E2E tests
+        run: pnpm test:e2e
+
+      - name: Upload E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            packages/app/playwright-report/
+            packages/app/test-results/
+          if-no-files-found: ignore
+
       - name: Build Nuxt
         run: pnpm --filter @dm-hero/app build
 

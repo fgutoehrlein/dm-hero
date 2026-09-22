@@ -422,7 +422,7 @@ export const migrations: Migration[] = [
       `)
 
       db.exec(`
-        CREATE TRIGGER entities_au AFTER UPDATE ON entities BEGIN
+        CREATE TRIGGER entities_au AFTER UPDATE OF name, description, metadata ON entities BEGIN
           UPDATE entities_fts
           SET name = new.name, description = new.description, metadata = new.metadata
           WHERE rowid = new.id;
@@ -2660,6 +2660,234 @@ export const migrations: Migration[] = [
       db.exec('ALTER TABLE sessions ADD COLUMN music_links TEXT NOT NULL DEFAULT \'[]\'')
 
       console.log('✅ Migration 54: Added sessions.music_links')
+    },
+  },
+  {
+    version: 55,
+    name: 'narrative_foundations',
+    up: (db) => {
+      // `entities_fts` is an external-content FTS5 table. Its legacy triggers
+      // wrote directly to the virtual table, which can corrupt its index.
+      // Rebuild it with the documented FTS5 commands before touching entities.
+      db.exec('DROP TRIGGER IF EXISTS entities_ai')
+      db.exec('DROP TRIGGER IF EXISTS entities_ad')
+      db.exec('DROP TRIGGER IF EXISTS entities_au')
+      db.exec(`
+        DROP TABLE IF EXISTS entities_fts;
+        CREATE VIRTUAL TABLE entities_fts USING fts5(
+          name, description, metadata,
+          content='entities', content_rowid='id'
+        );
+        INSERT INTO entities_fts(entities_fts) VALUES ('rebuild');
+
+        CREATE TRIGGER entities_ai AFTER INSERT ON entities BEGIN
+          INSERT INTO entities_fts(rowid, name, description, metadata)
+          VALUES (new.id, new.name, new.description, new.metadata);
+        END;
+        CREATE TRIGGER entities_ad AFTER DELETE ON entities BEGIN
+          INSERT INTO entities_fts(entities_fts, rowid, name, description, metadata)
+          VALUES ('delete', old.id, old.name, old.description, old.metadata);
+        END;
+        CREATE TRIGGER entities_au AFTER UPDATE OF name, description, metadata ON entities BEGIN
+          INSERT INTO entities_fts(entities_fts, rowid, name, description, metadata)
+          VALUES ('delete', old.id, old.name, old.description, old.metadata);
+          INSERT INTO entities_fts(rowid, name, description, metadata)
+          VALUES (new.id, new.name, new.description, new.metadata);
+        END;
+      `)
+
+      // Numeric IDs remain the internal/legacy reference. UIDs are immutable
+      // public references and are populated for every existing row.
+      db.exec('ALTER TABLE entities ADD COLUMN uid TEXT')
+      db.exec("UPDATE entities SET uid = 'ent_' || lower(hex(randomblob(16))) WHERE uid IS NULL")
+      db.exec('CREATE UNIQUE INDEX idx_entities_uid ON entities(uid)')
+      db.exec(`
+        CREATE TRIGGER entities_assign_uid AFTER INSERT ON entities
+        WHEN NEW.uid IS NULL
+        BEGIN
+          UPDATE entities SET uid = 'ent_' || lower(hex(randomblob(16))) WHERE id = NEW.id;
+        END
+      `)
+
+      db.exec("ALTER TABLE entity_relations ADD COLUMN direction TEXT NOT NULL DEFAULT 'directed'")
+      db.exec('ALTER TABLE entity_relations ADD COLUMN label TEXT')
+      db.exec('ALTER TABLE entity_relations ADD COLUMN valid_from TEXT')
+      db.exec('ALTER TABLE entity_relations ADD COLUMN valid_to TEXT')
+      db.exec("ALTER TABLE entity_relations ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+
+      db.exec(`
+        CREATE TABLE manuscripts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          description TEXT,
+          canon_state TEXT NOT NULL DEFAULT 'canon',
+          lifecycle_state TEXT NOT NULL DEFAULT 'draft',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_manuscripts_campaign ON manuscripts(campaign_id);
+
+        CREATE TABLE manuscript_sections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          manuscript_id INTEGER NOT NULL REFERENCES manuscripts(id) ON DELETE CASCADE,
+          parent_section_id INTEGER REFERENCES manuscript_sections(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          section_type TEXT NOT NULL CHECK(section_type IN ('book', 'part', 'chapter', 'scene')),
+          content TEXT NOT NULL DEFAULT '',
+          metadata TEXT NOT NULL DEFAULT '{}',
+          canon_state TEXT NOT NULL DEFAULT 'canon',
+          lifecycle_state TEXT NOT NULL DEFAULT 'draft',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_manuscript_sections_parent ON manuscript_sections(manuscript_id, parent_section_id, sort_order);
+
+        CREATE TABLE story_beats (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          manuscript_section_id INTEGER REFERENCES manuscript_sections(id) ON DELETE SET NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          canon_state TEXT NOT NULL DEFAULT 'canon',
+          lifecycle_state TEXT NOT NULL DEFAULT 'draft',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_story_beats_campaign ON story_beats(campaign_id, sort_order);
+
+        CREATE TABLE record_revisions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          record_type TEXT NOT NULL,
+          record_id INTEGER NOT NULL,
+          snapshot TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_record_revisions_record ON record_revisions(campaign_id, record_type, record_id, created_at DESC);
+      `)
+
+      console.log('✅ Migration 55: Added narrative foundations')
+    },
+  },
+  {
+    version: 56,
+    name: 'campaign_quest_and_dialogue_authoring',
+    up: (db) => {
+      db.exec(`
+        INSERT INTO manuscripts (campaign_id, title)
+        SELECT id, name FROM campaigns
+        WHERE id NOT IN (SELECT campaign_id FROM manuscripts);
+        CREATE UNIQUE INDEX idx_manuscripts_one_per_campaign ON manuscripts(campaign_id);
+        CREATE TRIGGER campaigns_create_manuscript AFTER INSERT ON campaigns BEGIN
+          INSERT INTO manuscripts (campaign_id, title) VALUES (NEW.id, NEW.name);
+        END;
+
+        CREATE TABLE campaign_variables (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          value_type TEXT NOT NULL CHECK(value_type IN ('boolean', 'integer', 'decimal', 'string')),
+          default_value TEXT NOT NULL,
+          description TEXT,
+          UNIQUE(campaign_id, name)
+        );
+
+        CREATE TABLE quests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'draft',
+          canon_state TEXT NOT NULL DEFAULT 'canon',
+          lifecycle_state TEXT NOT NULL DEFAULT 'draft',
+          recovery_notes TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_quests_campaign ON quests(campaign_id, status);
+        CREATE TABLE quest_objectives (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          quest_id INTEGER NOT NULL REFERENCES quests(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending',
+          sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE quest_transitions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          quest_id INTEGER NOT NULL REFERENCES quests(id) ON DELETE CASCADE,
+          from_status TEXT NOT NULL,
+          to_status TEXT NOT NULL,
+          condition_ast TEXT NOT NULL DEFAULT '{"all":[]}',
+          effect_ast TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE TABLE quest_dependencies (
+          quest_id INTEGER NOT NULL REFERENCES quests(id) ON DELETE CASCADE,
+          depends_on_quest_id INTEGER NOT NULL REFERENCES quests(id) ON DELETE CASCADE,
+          PRIMARY KEY (quest_id, depends_on_quest_id),
+          CHECK(quest_id != depends_on_quest_id)
+        );
+
+        CREATE TABLE dialogue_graphs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          lifecycle_state TEXT NOT NULL DEFAULT 'draft',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_dialogue_graphs_campaign ON dialogue_graphs(campaign_id);
+        CREATE TABLE dialogue_nodes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          graph_id INTEGER NOT NULL REFERENCES dialogue_graphs(id) ON DELETE CASCADE,
+          node_type TEXT NOT NULL CHECK(node_type IN ('line', 'choice', 'condition', 'effect', 'note', 'end')),
+          line_id TEXT,
+          title TEXT,
+          content TEXT NOT NULL DEFAULT '',
+          condition_ast TEXT NOT NULL DEFAULT '{"all":[]}',
+          effect_ast TEXT NOT NULL DEFAULT '[]',
+          position_x REAL NOT NULL DEFAULT 0,
+          position_y REAL NOT NULL DEFAULT 0,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(graph_id, line_id)
+        );
+        CREATE TABLE dialogue_edges (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          graph_id INTEGER NOT NULL REFERENCES dialogue_graphs(id) ON DELETE CASCADE,
+          source_node_id INTEGER NOT NULL REFERENCES dialogue_nodes(id) ON DELETE CASCADE,
+          target_node_id INTEGER NOT NULL REFERENCES dialogue_nodes(id) ON DELETE CASCADE,
+          label TEXT,
+          condition_ast TEXT NOT NULL DEFAULT '{"all":[]}',
+          effect_ast TEXT NOT NULL DEFAULT '[]'
+        );
+      `)
+      console.log('✅ Migration 56: Added campaign quest and dialogue authoring')
+    },
+  },
+  {
+    version: 57,
+    name: 'narrative_scene_metadata',
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE manuscript_sections ADD COLUMN viewpoint TEXT;
+        ALTER TABLE manuscript_sections ADD COLUMN location_entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL;
+        ALTER TABLE manuscript_sections ADD COLUMN story_date TEXT;
+        CREATE TABLE narrative_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          source_type TEXT NOT NULL,
+          source_id INTEGER NOT NULL,
+          target_uid TEXT NOT NULL,
+          label TEXT,
+          UNIQUE(campaign_id, source_type, source_id, target_uid)
+        );
+        CREATE INDEX idx_narrative_links_target ON narrative_links(campaign_id, target_uid);
+      `)
+      console.log('✅ Migration 57: Added scene metadata and narrative links')
     },
   },
 ]

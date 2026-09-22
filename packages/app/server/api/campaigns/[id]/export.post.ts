@@ -36,6 +36,7 @@ import type {
   ExportClass,
   ExportStatTemplate,
   ExportEntityStats,
+  ExportNarrative,
 } from '~~/types/export'
 import { EXPORT_FORMAT_VERSION } from '~~/types/export'
 
@@ -126,6 +127,24 @@ export default defineEventHandler(async (event) => {
     filesToInclude.push({ sourcePath, archivePath })
     return archivePath
   }
+
+  const manuscript = db.prepare('SELECT * FROM manuscripts WHERE campaign_id = ?').get(campaignId) as Record<string, unknown> | undefined
+  const narrative: ExportNarrative | undefined = manuscript
+    ? {
+        manuscript,
+        sections: db.prepare('SELECT * FROM manuscript_sections WHERE manuscript_id = ? ORDER BY sort_order, id').all(manuscript.id) as Record<string, unknown>[],
+        beats: db.prepare('SELECT * FROM story_beats WHERE campaign_id = ? ORDER BY sort_order, id').all(campaignId) as Record<string, unknown>[],
+        variables: db.prepare('SELECT * FROM campaign_variables WHERE campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+        quests: db.prepare('SELECT * FROM quests WHERE campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+        objectives: db.prepare('SELECT o.* FROM quest_objectives o JOIN quests q ON q.id = o.quest_id WHERE q.campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+        transitions: db.prepare('SELECT t.* FROM quest_transitions t JOIN quests q ON q.id = t.quest_id WHERE q.campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+        dependencies: db.prepare('SELECT d.* FROM quest_dependencies d JOIN quests q ON q.id = d.quest_id WHERE q.campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+        dialogues: db.prepare('SELECT * FROM dialogue_graphs WHERE campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+        dialogueNodes: db.prepare('SELECT n.* FROM dialogue_nodes n JOIN dialogue_graphs g ON g.id = n.graph_id WHERE g.campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+        dialogueEdges: db.prepare('SELECT e.* FROM dialogue_edges e JOIN dialogue_graphs g ON g.id = e.graph_id WHERE g.campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+        links: db.prepare('SELECT * FROM narrative_links WHERE campaign_id = ?').all(campaignId) as Record<string, unknown>[],
+      }
+    : undefined
 
   // ==========================================================================
   // FETCH ALL DATA
@@ -1171,6 +1190,7 @@ export default defineEventHandler(async (event) => {
     entityStats: exportEntityStats.length > 0 ? exportEntityStats : undefined,
     tags: exportTags,
     folders: exportFolders.length > 0 ? exportFolders : undefined,
+    narrative,
   }
 
   // ==========================================================================

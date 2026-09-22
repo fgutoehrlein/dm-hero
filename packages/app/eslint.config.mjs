@@ -38,6 +38,7 @@ export default withNuxt({
     // Stylistic overrides (rest handled by @nuxt/eslint stylistic)
     '@stylistic/comma-dangle': ['error', 'always-multiline'],
     '@stylistic/quotes': ['error', 'single', { avoidEscape: true }],
+    '@stylistic/max-statements-per-line': 'off',
 
     // General rules
     'no-console': 'off',

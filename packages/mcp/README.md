@@ -18,9 +18,16 @@ The AI never needs DM Hero's source. It talks only to the app's local HTTP API. 
 - `list_groups` / `create_group` / `add_group_members` — groups (the party, a cult, the villains of a chapter).
 - `list_maps` / `create_map` / `add_map_marker` / `add_map_area` — maps from an image file/URL, entities as markers, locations as circles (percent coordinates).
 - `list_encounters` / `create_encounter` — prepared combats with participants and HP, optionally attached to a session.
+- `get_campaign_context` — bounded campaign read for grounded authoring.
+- `list_quests` / `get_quest` / `preview_quest` / `create_quest` / `validate_quest` — structured quest packages with objectives, transitions, dependencies and links.
+- `get_manuscript` / `preview_manuscript_change` / `create_manuscript_section` / `update_manuscript_section` / `reorder_manuscript_sections` — outline-first book, part, chapter and scene authoring.
+- `list_dialogues` / `get_dialogue` / `create_dialogue` / `update_dialogue` / `validate_dialogue` / `simulate_dialogue` — dialogue graph authoring and deterministic checks.
+- `link_narrative_records` — connect quests/dialogues to NPCs and related narrative records.
 - `what_can_i_do` — plain-language overview of all capabilities, how to ask, and the preview → confirm rules; the AI can read it back to the user.
 
 Descriptions may cross-link entities of the same payload with `{{ref:npc:1}}` (or `{{ref:existing:12}}`); the import resolves them to real `{{npc:123}}` links. Previews warn about entities that already exist with the same name.
+
+Narrative authoring follows the same safety rule: read campaign context first, call a `preview_*` tool (or a write tool with `confirm=false`), show the proposal, and only call the write with `confirm=true` after explicit user approval. Proposed world facts must be labeled as proposed/non-canon until approved.
 
 ## Build
 

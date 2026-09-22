@@ -153,6 +153,7 @@
           {{ $t('common.cancel') }}
         </v-btn>
         <v-btn
+          data-testid="campaign-export-download"
           color="primary"
           variant="flat"
           :loading="exporting"

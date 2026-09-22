@@ -762,7 +762,7 @@ export default defineEventHandler(async (event) => {
     .slice(0, 20)
 
   // Parse linked_entities into clean array and return (exclude internal fields)
-  return scoredResults.map(({ _score, linked_entities, metadata, ...result }) => {
+  const entityResults = scoredResults.map(({ _score, linked_entities, metadata, ...result }) => {
     // Parse linked_entities string into unique, non-empty names
     const linkedNames: string[] = []
     if (linked_entities) {
@@ -797,4 +797,12 @@ export default defineEventHandler(async (event) => {
       linkedEntities: linkedNames.slice(0, 5), // Limit to 5 for UI
     }
   })
+  const pattern = `%${searchQuery.trim()}%`
+  const narrativeResults = [
+    ...db.prepare("SELECT s.id, s.title AS name, 'Manuscript' AS type FROM manuscript_sections s JOIN manuscripts m ON m.id = s.manuscript_id WHERE m.campaign_id = ? AND (s.title LIKE ? OR s.content LIKE ?) LIMIT 10").all(campaignId, pattern, pattern),
+    ...db.prepare("SELECT id, title AS name, 'Quest' AS type FROM quests WHERE campaign_id = ? AND (title LIKE ? OR description LIKE ?) LIMIT 10").all(campaignId, pattern, pattern),
+    ...db.prepare("SELECT id, title AS name, 'Dialogue' AS type FROM dialogue_graphs WHERE campaign_id = ? AND (title LIKE ? OR description LIKE ?) LIMIT 10").all(campaignId, pattern, pattern),
+  ] as Array<{ id: number, name: string, type: string }>
+  const paths: Record<string, string> = { Manuscript: '/manuscript', Quest: '/quests', Dialogue: '/dialogues' }
+  return [...entityResults, ...narrativeResults.map(result => ({ ...result, icon: result.type === 'Manuscript' ? 'mdi-book-open-page-variant' : result.type === 'Quest' ? 'mdi-compass' : 'mdi-message-text', color: '#78909C', path: paths[result.type], linkedEntities: [] }))]
 })

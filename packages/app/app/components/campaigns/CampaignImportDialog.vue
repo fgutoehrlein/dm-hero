@@ -11,6 +11,7 @@
         <div v-if="step === 'upload'">
           <v-file-input
             v-model="selectedFile"
+            data-testid="campaign-import-file"
             accept=".dmhero"
             :label="$t('campaigns.import.selectFile')"
             prepend-icon="mdi-file-upload"
@@ -167,6 +168,7 @@
             <v-text-field
               v-if="importMode === 'new'"
               v-model="campaignName"
+              data-testid="campaign-import-name"
               :label="$t('campaigns.import.campaignName')"
               variant="outlined"
               density="compact"
@@ -384,7 +386,7 @@
         </div>
 
         <!-- Step 4: Success -->
-        <div v-else-if="step === 'success'" class="text-center py-8">
+        <div v-else-if="step === 'success'" data-testid="campaign-import-success" class="text-center py-8">
           <v-icon size="64" color="success" class="mb-4">mdi-check-circle</v-icon>
           <div class="text-headline-small">{{ $t('campaigns.import.success') }}</div>
           <div class="text-body-medium text-medium-emphasis">
@@ -414,6 +416,7 @@
             {{ $t('common.back') }}
           </v-btn>
           <v-btn
+            data-testid="campaign-import-confirm"
             color="primary"
             variant="flat"
             :disabled="!preview || parsing"

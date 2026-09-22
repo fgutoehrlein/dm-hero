@@ -8,6 +8,7 @@ dist
 
 # Node dependencies
 node_modules
+.worktrees/
 
 # Logs
 logs
@@ -45,6 +46,8 @@ squashfs-root/
 # Test coverage
 coverage/
 packages/*/coverage/
+packages/*/playwright-report/
+packages/*/test-results/
 
 # Private project documentation (keep local only)
 CLAUDE.md

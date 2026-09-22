@@ -180,6 +180,10 @@ server.registerTool('what_can_i_do', {
     { area: 'Groups', canDo: 'list groups, create groups (the party, a cult, the villains of a chapter) and add members', askLike: '"Group the three cultists as \'Cult of the Eye\'"' },
     { area: 'Maps', canDo: 'create maps from an image, place NPCs/items as markers and locations as areas (circles) on them', askLike: '"Add the region map from page 3 and place Eichwald and the ruins on it"' },
     { area: 'Encounters', canDo: 'prepare combat encounters with participants (NPCs as monsters) and HP, optionally attached to a session', askLike: '"Prepare the ambush encounter with 4 goblins and the boss"' },
+    { area: 'Quests', canDo: 'create grounded quest packages with objectives, transitions, dependencies, validation, and NPC/dialogue links', askLike: '"Create a quest to recover the Sunken Crown, rooted in the existing factions"' },
+    { area: 'Manuscript', canDo: 'outline and write the campaign book as ordered book/part/chapter/scene Markdown with links and revisions', askLike: '"Outline the protagonist\'s book, then draft chapter one"' },
+    { area: 'Dialogue', canDo: 'create and validate dialogue graphs, simulate paths, and connect them to quests and NPCs', askLike: '"Add the gatekeeper dialogue to the quest and test every ending"' },
+    { area: 'Grounding', canDo: 'read campaign context first and mark invented lore, history, and NPC facts as proposed until approved', askLike: '"Make this NPC feel rooted in my existing world"' },
     { area: 'Reading', canDo: 'look up what already exists: search entities, read one entity in full (relations, documents, tags), list sessions/groups/maps/encounters', askLike: '"What do we know about the mayor?" / "Which sessions exist?"' },
   ],
   rules: [
@@ -191,7 +195,7 @@ server.registerTool('what_can_i_do', {
   typicalWorkflow: [
     '1. You hand me a source (PDF/text) and name the campaign.',
     '2. I call get_contract, extract NPCs/locations/items/factions/lore, plan groups, maps and encounters, and show you the plan.',
-    '3. After your OK: import_entities (with cross-links), then images, documents, groups, map markers, encounters, and a session with the intro.',
+    '3. After your OK: create the approved entities, lore, quest, manuscript, and dialogue records through their dedicated tools.',
     '4. I report what was created with ids, and you can ask me to adjust anything.',
   ],
 }))
@@ -681,6 +685,203 @@ server.registerTool('create_encounter', {
     added = p.body
   }
   return asText({ encounter: r.body, participants: added })
+})
+
+// ---------------------------------------------------------------------------
+// Narrative authoring
+// ---------------------------------------------------------------------------
+
+const questPackageSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().optional(),
+  status: z.enum(['draft', 'available', 'active', 'completed', 'failed']).optional(),
+  recoveryNotes: z.string().optional(),
+  objectives: z.array(z.object({ title: z.string().min(1), description: z.string().optional(), status: z.string().optional() })).optional(),
+  transitions: z.array(z.object({ fromStatus: z.string().min(1), toStatus: z.string().min(1) })).optional(),
+  dependencies: z.array(z.number().int().positive()).optional(),
+  npcUids: z.array(z.string()).optional(),
+  dialogueIds: z.array(z.number().int().positive()).optional(),
+})
+
+server.registerTool('get_campaign_context', {
+  description: 'Read bounded campaign context before authoring: existing entities, manuscript structure, quests, and dialogue graphs. Always use this before creating grounded narrative content.',
+  inputSchema: { campaignId: z.number().int().positive(), entityLimit: z.number().int().positive().max(200).default(100) },
+}, async ({ campaignId, entityLimit }) => {
+  const [entities, manuscript, quests, dialogues] = await Promise.all([
+    callApi(`/api/import/entities?campaignId=${campaignId}&limit=${entityLimit}`),
+    callApi(`/api/campaigns/${campaignId}/manuscript`),
+    callApi(`/api/campaigns/${campaignId}/quests`),
+    callApi(`/api/campaigns/${campaignId}/dialogues`),
+  ])
+  return asText({ campaignId, entities: entities.body, manuscript: manuscript.body, quests: quests.body, dialogues: dialogues.body })
+})
+
+server.registerTool('list_quests', {
+  description: 'List campaign quests before creating or editing one.',
+  inputSchema: { campaignId: z.number().int().positive() },
+}, async ({ campaignId }) => asText((await callApi(`/api/campaigns/${campaignId}/quests`)).body))
+
+server.registerTool('get_quest', {
+  description: 'Read one quest including objectives, transitions, dependencies, and narrative links.',
+  inputSchema: { campaignId: z.number().int().positive(), questId: z.number().int().positive() },
+}, async ({ campaignId, questId }) => {
+  const base = await callApi(`/api/campaigns/${campaignId}/quests`)
+  const quest = Array.isArray(base.body) ? (base.body as Array<{ id: number }>).find(row => row.id === questId) : null
+  if (!quest) return asText({ ok: false, error: 'Quest not found in campaign' })
+  const [objectives, transitions, dependencies, links] = await Promise.all([
+    callApi(`/api/campaigns/${campaignId}/quests/${questId}/objectives`),
+    callApi(`/api/campaigns/${campaignId}/quests/${questId}/transitions`),
+    callApi(`/api/campaigns/${campaignId}/quests/${questId}/dependencies`),
+    callApi(`/api/campaigns/${campaignId}/quests/${questId}/links`),
+  ])
+  return asText({ quest, objectives: objectives.body, transitions: transitions.body, dependencies: dependencies.body, links: links.body })
+})
+
+server.registerTool('preview_quest', {
+  description: 'Build a structured quest proposal without writing anything. Show the proposal to the user and wait for explicit confirmation before calling create_quest with confirm=true.',
+  inputSchema: { campaignId: z.number().int().positive(), quest: questPackageSchema },
+}, async ({ campaignId, quest }) => asText({ proposal: 'quest', campaignId, quest, writes: ['quest', 'objectives', 'transitions', 'dependencies', 'links'], note: 'Nothing was written. Ask the user to confirm.' }))
+
+server.registerTool('create_quest', {
+  description: 'Create a structured quest package. confirm=false returns a proposal only; call with confirm=true only after explicit user approval.',
+  inputSchema: { campaignId: z.number().int().positive(), quest: questPackageSchema, confirm: z.boolean().default(false) },
+}, async ({ campaignId, quest, confirm }) => {
+  if (!confirm) return asText({ proposal: quest, note: 'Nothing was written. Call again with confirm=true after user approval.' })
+  const created = await callApi(`/api/campaigns/${campaignId}/quests`, { method: 'POST', body: JSON.stringify({ title: quest.title }) })
+  if (!created.ok) return asText(created.body)
+  const id = (created.body as { id: number }).id
+  const updates = await callApi(`/api/campaigns/${campaignId}/quests/${id}`, { method: 'PATCH', body: JSON.stringify({ description: quest.description, status: quest.status, recovery_notes: quest.recoveryNotes }) })
+  const objectives = []
+  for (const objective of quest.objectives || []) objectives.push((await callApi(`/api/campaigns/${campaignId}/quests/${id}/objectives`, { method: 'POST', body: JSON.stringify(objective) })).body)
+  const transitions = []
+  for (const transition of quest.transitions || []) transitions.push((await callApi(`/api/campaigns/${campaignId}/quests/${id}/transitions`, { method: 'POST', body: JSON.stringify({ from_status: transition.fromStatus, to_status: transition.toStatus }) })).body)
+  for (const dependency of quest.dependencies || []) await callApi(`/api/campaigns/${campaignId}/quests/${id}/dependencies`, { method: 'POST', body: JSON.stringify({ depends_on_quest_id: dependency }) })
+  let links: unknown = null
+  if (quest.npcUids?.length || quest.dialogueIds?.length) links = (await callApi(`/api/campaigns/${campaignId}/quests/${id}/links`, { method: 'PUT', body: JSON.stringify({ npc_uids: quest.npcUids || [], dialogue_ids: quest.dialogueIds || [] }) })).body
+  return asText({ quest: updates.body, objectives, transitions, links })
+})
+
+server.registerTool('validate_quest', {
+  description: 'Validate a quest for broken links, invalid transitions, undefined values, unreachable objectives, and dead ends.',
+  inputSchema: { campaignId: z.number().int().positive(), questId: z.number().int().positive() },
+}, async ({ campaignId, questId }) => asText((await callApi(`/api/campaigns/${campaignId}/quests/${questId}/validate`)).body))
+
+server.registerTool('get_manuscript', {
+  description: 'Read the campaign Manuscript and ordered book/part/chapter/scene sections before outlining or drafting prose.',
+  inputSchema: { campaignId: z.number().int().positive() },
+}, async ({ campaignId }) => asText((await callApi(`/api/campaigns/${campaignId}/manuscript`)).body))
+
+const manuscriptChangeSchema = z.object({ title: z.string().optional(), description: z.string().optional(), sectionType: z.enum(['book', 'part', 'chapter', 'scene']).optional(), content: z.string().optional(), parentSectionId: z.number().int().positive().nullable().optional(), viewpoint: z.string().optional(), storyDate: z.string().optional() })
+
+server.registerTool('preview_manuscript_change', {
+  description: 'Prepare a manuscript outline/prose change without writing it. Show the section title, type, parent, and Markdown diff to the user first.',
+  inputSchema: { campaignId: z.number().int().positive(), sectionId: z.number().int().positive().optional(), change: manuscriptChangeSchema },
+}, async ({ campaignId, sectionId, change }) => asText({ proposal: 'manuscript', campaignId, sectionId, change, note: 'Nothing was written. Ask the user to confirm.' }))
+
+server.registerTool('create_manuscript_section', {
+  description: 'Create one ordered Manuscript book/part/chapter/scene. confirm=false is preview-only; confirm=true requires explicit user approval.',
+  inputSchema: { campaignId: z.number().int().positive(), title: z.string().min(1), sectionType: z.enum(['book', 'part', 'chapter', 'scene']), parentSectionId: z.number().int().positive().nullable().optional(), confirm: z.boolean().default(false) },
+}, async ({ campaignId, title, sectionType, parentSectionId, confirm }) => {
+  const body = { title, section_type: sectionType, parent_section_id: parentSectionId ?? null }
+  if (!confirm) return asText({ proposal: body, note: 'Nothing was written. Call again with confirm=true after approval.' })
+  return asText((await callApi(`/api/campaigns/${campaignId}/manuscript/sections`, { method: 'POST', body: JSON.stringify(body) })).body)
+})
+
+server.registerTool('update_manuscript_section', {
+  description: 'Update Manuscript Markdown and metadata after confirmation. Use preview_manuscript_change first.',
+  inputSchema: { campaignId: z.number().int().positive(), sectionId: z.number().int().positive(), change: manuscriptChangeSchema, confirm: z.boolean().default(false) },
+}, async ({ campaignId, sectionId, change, confirm }) => {
+  if (!confirm) return asText({ proposal: { sectionId, change }, note: 'Nothing was written. Call again with confirm=true after approval.' })
+  const body = { ...change, section_type: change.sectionType, parent_section_id: change.parentSectionId, story_date: change.storyDate }
+  return asText((await callApi(`/api/campaigns/${campaignId}/manuscript/sections/${sectionId}`, { method: 'PATCH', body: JSON.stringify(body) })).body)
+})
+
+server.registerTool('reorder_manuscript_sections', {
+  description: 'Persist Manuscript section order after the proposed order has been approved.',
+  inputSchema: { campaignId: z.number().int().positive(), ids: z.array(z.number().int().positive()).min(1), confirm: z.boolean().default(false) },
+}, async ({ campaignId, ids, confirm }) => {
+  if (!confirm) return asText({ proposal: { ids }, note: 'Nothing was written. Call again with confirm=true after approval.' })
+  return asText((await callApi(`/api/campaigns/${campaignId}/manuscript/sections/reorder`, { method: 'PATCH', body: JSON.stringify({ ids }) })).body)
+})
+
+server.registerTool('restore_manuscript_revision', {
+  description: 'Restore an approved Manuscript section revision. confirm=false previews the restore; confirm=true persists it and keeps the current content revisioned.',
+  inputSchema: { campaignId: z.number().int().positive(), sectionId: z.number().int().positive(), revisionId: z.number().int().positive(), confirm: z.boolean().default(false) },
+}, async ({ campaignId, sectionId, revisionId, confirm }) => {
+  if (!confirm) return asText({ proposal: { campaignId, sectionId, revisionId }, note: 'Nothing was written. Call again with confirm=true after approval.' })
+  return asText((await callApi(`/api/campaigns/${campaignId}/manuscript/sections/${sectionId}/revisions/${revisionId}/restore`, { method: 'POST' })).body)
+})
+
+server.registerTool('list_dialogues', {
+  description: 'List campaign dialogue graphs before creating or editing one.',
+  inputSchema: { campaignId: z.number().int().positive() },
+}, async ({ campaignId }) => asText((await callApi(`/api/campaigns/${campaignId}/dialogues`)).body))
+
+server.registerTool('get_dialogue', {
+  description: 'Read one dialogue graph with nodes, edges, and campaign links.',
+  inputSchema: { campaignId: z.number().int().positive(), dialogueId: z.number().int().positive() },
+}, async ({ campaignId, dialogueId }) => {
+  const [graph, links] = await Promise.all([
+    callApi(`/api/campaigns/${campaignId}/dialogues/${dialogueId}`),
+    callApi(`/api/campaigns/${campaignId}/dialogues/${dialogueId}/links`),
+  ])
+  return asText({ graph: graph.body, links: links.body })
+})
+
+server.registerTool('create_dialogue', {
+  description: 'Create a dialogue graph after preview/approval. confirm=false performs no write.',
+  inputSchema: { campaignId: z.number().int().positive(), title: z.string().min(1), description: z.string().optional(), confirm: z.boolean().default(false) },
+}, async ({ campaignId, title, description, confirm }) => {
+  if (!confirm) return asText({ proposal: { title, description }, note: 'Nothing was written. Call again with confirm=true after approval.' })
+  const created = await callApi(`/api/campaigns/${campaignId}/dialogues`, { method: 'POST', body: JSON.stringify({ title }) })
+  if (!created.ok || !description) return asText(created.body)
+  const id = (created.body as { id: number }).id
+  return asText((await callApi(`/api/campaigns/${campaignId}/dialogues/${id}`, { method: 'PATCH', body: JSON.stringify({ description }) })).body)
+})
+
+server.registerTool('update_dialogue', {
+  description: 'Update dialogue graph metadata after preview/approval. Node/edge edits remain explicit graph operations in the UI.',
+  inputSchema: { campaignId: z.number().int().positive(), dialogueId: z.number().int().positive(), title: z.string().optional(), description: z.string().optional(), lifecycleState: z.string().optional(), confirm: z.boolean().default(false) },
+}, async ({ campaignId, dialogueId, title, description, lifecycleState, confirm }) => {
+  const body = { title, description, lifecycle_state: lifecycleState }
+  if (!confirm) return asText({ proposal: { dialogueId, ...body }, note: 'Nothing was written. Call again with confirm=true after approval.' })
+  return asText((await callApi(`/api/campaigns/${campaignId}/dialogues/${dialogueId}`, { method: 'PATCH', body: JSON.stringify(body) })).body)
+})
+
+server.registerTool('validate_dialogue', {
+  description: 'Validate dialogue links, variables, unreachable nodes, dead ends, and non-terminating paths.',
+  inputSchema: { campaignId: z.number().int().positive(), dialogueId: z.number().int().positive() },
+}, async ({ campaignId, dialogueId }) => asText((await callApi(`/api/campaigns/${campaignId}/dialogues/${dialogueId}/validate`)).body))
+
+server.registerTool('simulate_dialogue', {
+  description: 'Run the deterministic dialogue simulator from a starting node and return the trace/state changes.',
+  inputSchema: { campaignId: z.number().int().positive(), dialogueId: z.number().int().positive(), startNodeId: z.number().int().positive(), choices: z.array(z.number().int().nonnegative()).default([]) },
+}, async ({ campaignId, dialogueId, startNodeId, choices }) => asText((await callApi(`/api/campaigns/${campaignId}/dialogues/${dialogueId}/simulate`, { method: 'POST', body: JSON.stringify({ start_node_id: startNodeId, choices }) })).body))
+
+server.registerTool('link_narrative_records', {
+  description: 'Link a Quest or Dialogue to existing NPCs and related Quests/Dialogues after confirmation. Use stable NPC UIDs and campaign-local record IDs.',
+  inputSchema: { campaignId: z.number().int().positive(), sourceType: z.enum(['quest', 'dialogue']), sourceId: z.number().int().positive(), npcUids: z.array(z.string()).default([]), relatedIds: z.array(z.number().int().positive()).default([]), confirm: z.boolean().default(false) },
+}, async ({ campaignId, sourceType, sourceId, npcUids, relatedIds, confirm }) => {
+  const body = sourceType === 'quest' ? { npc_uids: npcUids, dialogue_ids: relatedIds } : { npc_uids: npcUids, quest_ids: relatedIds }
+  if (!confirm) return asText({ proposal: { sourceType, sourceId, ...body }, note: 'Nothing was written. Call again with confirm=true after approval.' })
+  const route = sourceType === 'quest' ? `/api/campaigns/${campaignId}/quests/${sourceId}/links` : `/api/campaigns/${campaignId}/dialogues/${sourceId}/links`
+  return asText((await callApi(route, { method: 'PUT', body: JSON.stringify(body) })).body)
+})
+
+server.registerTool('unlink_narrative_records', {
+  description: 'Remove selected NPC or related Quest/Dialogue links from a narrative record. confirm=false previews the resulting link set; confirm=true persists it after approval.',
+  inputSchema: { campaignId: z.number().int().positive(), sourceType: z.enum(['quest', 'dialogue']), sourceId: z.number().int().positive(), npcUids: z.array(z.string()).default([]), relatedIds: z.array(z.number().int().positive()).default([]), confirm: z.boolean().default(false) },
+}, async ({ campaignId, sourceType, sourceId, npcUids, relatedIds, confirm }) => {
+  const route = sourceType === 'quest' ? `/api/campaigns/${campaignId}/quests/${sourceId}/links` : `/api/campaigns/${campaignId}/dialogues/${sourceId}/links`
+  const current = await callApi(route)
+  if (!current.ok) return asText(current.body)
+  const links = current.body as { npc_uids?: string[], dialogue_ids?: number[], quest_ids?: number[] }
+  const remainingNpcs = (links.npc_uids || []).filter(uid => !npcUids.includes(uid))
+  const currentRelated = sourceType === 'quest' ? links.dialogue_ids || [] : links.quest_ids || []
+  const remainingRelated = currentRelated.filter(id => !relatedIds.includes(id))
+  const body = sourceType === 'quest' ? { npc_uids: remainingNpcs, dialogue_ids: remainingRelated } : { npc_uids: remainingNpcs, quest_ids: remainingRelated }
+  if (!confirm) return asText({ proposal: { sourceType, sourceId, removeNpcUids: npcUids, removeRelatedIds: relatedIds, resultingLinks: body }, note: 'Nothing was written. Call again with confirm=true after approval.' })
+  return asText((await callApi(route, { method: 'PUT', body: JSON.stringify(body) })).body)
 })
 
 const transport = new StdioServerTransport()

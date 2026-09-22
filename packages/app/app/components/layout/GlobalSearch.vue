@@ -7,6 +7,7 @@
     <v-card>
       <v-card-title class="d-flex align-center ga-2">
         <v-text-field
+          data-testid="global-search-input"
           :model-value="searchQuery"
           autofocus
           clearable

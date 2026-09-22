@@ -1,0 +1,4 @@
+import { getDb } from '~~/server/utils/db'
+import { requireCampaign, requireCampaignRecord } from '~~/server/utils/narrative'
+
+export default defineEventHandler(async (event) => { const db = getDb(); const campaignId = requireCampaign(db, getRouterParam(event, 'id')); const quest = requireCampaignRecord(db, 'quests', getRouterParam(event, 'questId'), campaignId); const { title } = await readBody<{ title: string }>(event); if (!title) throw createError({ statusCode: 400, message: 'Title is required' }); const result = db.prepare('INSERT INTO quest_objectives (quest_id, title, sort_order) VALUES (?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM quest_objectives WHERE quest_id = ?), 0))').run(quest.id, title, quest.id); return db.prepare('SELECT * FROM quest_objectives WHERE id = ?').get(result.lastInsertRowid) })
